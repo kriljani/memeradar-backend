@@ -10,6 +10,52 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const WATCH_MINS = parseInt(process.env.MONITOR_INTERVAL_MINS || "3");
 const NEWS_MINS  = parseInt(process.env.NEWS_SCAN_INTERVAL_MINS || "15");
 
+
+// Tolerant JSON extraction — survives preamble text and truncated responses
+function tolerantParse(text){
+  if (!text) return [];
+  let c = String(text).replace(/```json/gi,"").replace(/```/g,"").trim();
+  const i = c.indexOf("{");
+  if (i === -1) return [];
+  const j = c.lastIndexOf("}");
+  let body = j > i ? c.slice(i, j+1) : c.slice(i);
+
+  const t = s => { try { return JSON.parse(s); } catch { return null; } };
+  let p = t(body);
+
+  if (!p) {                       // repair truncation
+    let r = body;
+    let q = 0;
+    for (let k = 0; k < r.length; k++) if (r[k] === '"' && r[k-1] !== "\\") q++;
+    if (q % 2 === 1) r += '"';
+    r = r.replace(/,\s*"[^"]*"\s*:?\s*$/,"").replace(/,\s*$/,"");
+    const st = []; let ins = false;
+    for (let k = 0; k < r.length; k++){
+      const ch = r[k];
+      if (ch === '"' && r[k-1] !== "\\") ins = !ins;
+      if (ins) continue;
+      if (ch === "{" || ch === "[") st.push(ch);
+      else if (ch === "}" || ch === "]") st.pop();
+    }
+    while (st.length) r += st.pop() === "{" ? "}" : "]";
+    p = t(r);
+  }
+
+  if (!p) {                       // salvage complete objects
+    const out = []; let d = 0, s = -1, ins = false;
+    for (let k = 0; k < body.length; k++){
+      const ch = body[k];
+      if (ch === '"' && body[k-1] !== "\\") ins = !ins;
+      if (ins) continue;
+      if (ch === "{"){ if (d === 0) s = k; d++; }
+      else if (ch === "}"){ d--; if (d === 0 && s > -1){ const o = t(body.slice(s,k+1)); if (o && o.headline) out.push(o); s = -1; } }
+    }
+    return out;
+  }
+
+  return Array.isArray(p) ? p : (p.news || p.signals || []);
+}
+
 function start() {
   // ── Watchlist check every N minutes ──────────────
   cron.schedule(`*/${WATCH_MINS} * * * *`, async () => {
@@ -25,10 +71,9 @@ function start() {
         system: `News bot. Return ONLY raw JSON: {"news":[{"id":"uid","emoji":"","headline":"","brief":"","sources":[{"name":"","url":""}],"publishedAt":"","topics":[],"category":"POLITICS|SOCIAL|NEWS|PLATFORM","impact":0,"newsType":"BREAKING|ANALYSIS|RUMOR","whyMatters":""}]} — only impact 70+, max 8 items.`,
         messages: [{ role:"user", content:"Latest verified crypto/political news (last 3h) impacting meme coins. Focus on Dem 2028 candidates, midterm moments, viral stories, Pump.fun." }]
       });
-      const txt   = response.content.map(b => b.type==="text"?b.text:"").join("");
-      const match = txt.match(/\{[\s\S]*\}/);
-      if (!match) return;
-      const items = JSON.parse(match[0]).news || [];
+      const txt = (response.content || []).map(b => b.type==="text"?b.text:"").join("");
+      const items = tolerantParse(txt);
+      if (!items.length) { console.log("[Scheduler] news: no parseable items"); return; }
       const insert = db.prepare(`INSERT OR REPLACE INTO news_cache (id,headline,brief,sources_json,impact,category,news_type,why_matters,topics_json,emoji,fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?,strftime('%s','now'))`);
       db.transaction(rows => { for (const n of rows) insert.run(n.id||uuid(),n.headline,n.brief,JSON.stringify(n.sources||[]),n.impact||50,n.category,n.newsType||"ANALYSIS",n.whyMatters,JSON.stringify(n.topics||[]),n.emoji||"📰"); })(items.slice(0,8));
       items.filter(n=>n.newsType==="BREAKING"&&n.impact>=85).forEach(n => {
