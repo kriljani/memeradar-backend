@@ -14,6 +14,9 @@ const scheduler = require("./scheduler");
 const app    = express();
 const server = http.createServer(app);
 
+// Trust Railway proxy
+app.set("trust proxy", 1);
+
 // ── Security ──────────────────────────────────────
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 
