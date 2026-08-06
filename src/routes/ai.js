@@ -1,13 +1,11 @@
 // src/routes/ai.js — Anthropic API proxy
-const express   = require("express");
-const axios     = require("axios");
+const express = require("express");
+const axios   = require("axios");
+const router  = express.Router();
 
-const router = express.Router();
-
-// POST /api/ai/messages
 router.post("/messages", async (req, res) => {
   try {
-    const { model, max_tokens, system, messages, tools } = req.body;
+    const { model, system, messages, tools } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: "messages array required" });
@@ -15,11 +13,11 @@ router.post("/messages", async (req, res) => {
 
     const body = {
       model:      "claude-sonnet-4-6",
-      max_tokens: Math.min(parseInt(max_tokens) || 1000, 4000),
-      messages:   messages.slice(-20),
+      max_tokens: 4000,            // Always 4000 — never truncate JSON responses
+      messages:   messages.slice(-10), // Last 10 turns only to save input tokens
     };
 
-    if (system)        body.system = system.slice(0, 12000);
+    if (system)        body.system = system.slice(0, 6000); // Limit system prompt
     if (tools?.length) body.tools  = tools;
 
     const response = await axios.post(
@@ -32,7 +30,7 @@ router.post("/messages", async (req, res) => {
           "anthropic-beta":   "web-search-2025-03-05",
           "content-type":     "application/json",
         },
-        timeout: 90000,
+        timeout: 120000,
       }
     );
 
