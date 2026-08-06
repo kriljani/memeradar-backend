@@ -37,7 +37,50 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: "2mb" }));
+// ── Self-healing JSON body parser ─────────────────
+// Escapes raw control characters inside string literals, which is the exact
+// cause of "Bad control character in string literal". Strict express.json()
+// throws a 500 on these; this repairs them instead.
+function sanitizeJson(raw){
+  let out = "", inStr = false, esc = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i], code = raw.charCodeAt(i);
+    if (esc) { out += ch; esc = false; continue; }
+    if (ch === "\\" && inStr) { out += ch; esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; out += ch; continue; }
+    if (inStr && code < 0x20) {
+      if      (code === 0x0A) out += "\\n";
+      else if (code === 0x0D) out += "\\r";
+      else if (code === 0x09) out += "\\t";
+      else if (code === 0x08) out += "\\b";
+      else if (code === 0x0C) out += "\\f";
+      else out += "\\u" + code.toString(16).padStart(4, "0");
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+app.use(express.text({ type: ["application/json", "text/plain"], limit: "4mb" }));
+app.use((req, res, next) => {
+  if (typeof req.body !== "string" || !req.body.length) {
+    if (typeof req.body !== "object" || req.body === null) req.body = {};
+    return next();
+  }
+  try {
+    req.body = JSON.parse(req.body);
+  } catch (e1) {
+    try {
+      req.body = JSON.parse(sanitizeJson(req.body));
+      console.warn("[Body] Repaired malformed JSON on", req.path);
+    } catch (e2) {
+      console.error("[Body] Unparseable JSON on", req.path, "-", e2.message);
+      return res.status(400).json({ error: "Malformed JSON body: " + e2.message });
+    }
+  }
+  next();
+});
 
 // ── Health ────────────────────────────────────────
 app.get("/health", (_, res) => res.json({
@@ -57,7 +100,10 @@ app.use("/api/data",      require("./routes/data"));
 app.use("/api/whale",     require("./routes/whale").router);
 
 app.use((req, res) => res.status(404).json({ error: `Not found: ${req.path}` }));
-app.use((err, req, res, next) => { console.error(err.message); res.status(500).json({ error:"Internal error" }); });
+app.use((err, req, res, next) => {
+  console.error("[Server]", req.method, req.path, "-", err.message);
+  res.status(err.status || 500).json({ error: err.message || "Internal error" });
+});
 
 // ── WebSocket + Scheduler ─────────────────────────
 ws.init(server);
