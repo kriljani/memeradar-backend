@@ -20,7 +20,7 @@ function start() {
   cron.schedule(`*/${NEWS_MINS} * * * *`, async () => {
     try {
       const response = await client.messages.create({
-        model: "claude-sonnet-4-20250514", max_tokens: 1000,
+        model: "claude-sonnet-4-6", max_tokens: 1000,
         tools: [{ type: "web_search_20250305", name: "web_search" }],
         system: `News bot. Return ONLY raw JSON: {"news":[{"id":"uid","emoji":"","headline":"","brief":"","sources":[{"name":"","url":""}],"publishedAt":"","topics":[],"category":"POLITICS|SOCIAL|NEWS|PLATFORM","impact":0,"newsType":"BREAKING|ANALYSIS|RUMOR","whyMatters":""}]} — only impact 70+, max 8 items.`,
         messages: [{ role:"user", content:"Latest verified crypto/political news (last 3h) impacting meme coins. Focus on Dem 2028 candidates, midterm moments, viral stories, Pump.fun." }]
