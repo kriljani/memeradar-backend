@@ -1,45 +1,46 @@
-// src/routes/ai.js — Anthropic API proxy
-const express = require("express");
-const axios   = require("axios");
-const router  = express.Router();
+// src/routes/ai.js — Anthropic API proxy using official SDK
+const express   = require("express");
+const Anthropic  = require("@anthropic-ai/sdk");
+const router    = express.Router();
+
+// Initialize once at startup
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  timeout: 120000, // 2 minute timeout
+});
 
 router.post("/messages", async (req, res) => {
   try {
-    const { model, system, messages } = req.body;
-    // Note: we intentionally ignore 'tools' here to prevent
-    // web search from consuming the entire 200k context window
+    const { system, messages } = req.body;
 
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: "messages array required" });
+    if (!messages?.length) {
+      return res.status(400).json({ error: "messages required" });
     }
 
-    const body = {
+    console.log("[AI] Request — messages:", messages.length, "system length:", system?.length || 0);
+
+    const params = {
       model:      "claude-sonnet-4-6",
-      max_tokens: 4000,
-      messages:   messages.slice(-6),        // Last 6 turns only
-      system:     (system || "").slice(0, 4000), // Hard limit on system prompt
+      max_tokens: 2000,
+      messages:   messages.slice(-4), // Last 4 turns only
     };
 
-    const response = await axios.post(
-      "https://api.anthropic.com/v1/messages",
-      body,
-      {
-        headers: {
-          "x-api-key":        process.env.ANTHROPIC_API_KEY,
-          "anthropic-version":"2023-06-01",
-          "content-type":     "application/json",
-        },
-        timeout: 60000,
-      }
-    );
+    // Only add system if non-empty (empty string causes API issues)
+    if (system && system.trim().length > 10) {
+      params.system = system.slice(0, 3000);
+    }
 
-    res.json(response.data);
+    console.log("[AI] Calling Anthropic...");
+    const response = await client.messages.create(params);
+    console.log("[AI] Success — stop_reason:", response.stop_reason, "output tokens:", response.usage?.output_tokens);
+
+    res.json(response);
 
   } catch (err) {
-    const status  = err.response?.status  || 500;
-    const message = err.response?.data?.error?.message || err.message;
-    console.error("[AI] Error:", status, message);
-    res.status(status).json({ error: message });
+    console.error("[AI] Error:", err.status || 500, err.message);
+    res.status(err.status || 500).json({
+      error: err.message || "AI service error"
+    });
   }
 });
 
