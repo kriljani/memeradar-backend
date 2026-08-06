@@ -5,7 +5,9 @@ const router  = express.Router();
 
 router.post("/messages", async (req, res) => {
   try {
-    const { model, system, messages, tools } = req.body;
+    const { model, system, messages } = req.body;
+    // Note: we intentionally ignore 'tools' here to prevent
+    // web search from consuming the entire 200k context window
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: "messages array required" });
@@ -13,12 +15,10 @@ router.post("/messages", async (req, res) => {
 
     const body = {
       model:      "claude-sonnet-4-6",
-      max_tokens: 4000,            // Always 4000 — never truncate JSON responses
-      messages:   messages.slice(-10), // Last 10 turns only to save input tokens
+      max_tokens: 4000,
+      messages:   messages.slice(-6),        // Last 6 turns only
+      system:     (system || "").slice(0, 4000), // Hard limit on system prompt
     };
-
-    if (system)        body.system = system.slice(0, 6000); // Limit system prompt
-    if (tools?.length) body.tools  = tools;
 
     const response = await axios.post(
       "https://api.anthropic.com/v1/messages",
@@ -27,10 +27,9 @@ router.post("/messages", async (req, res) => {
         headers: {
           "x-api-key":        process.env.ANTHROPIC_API_KEY,
           "anthropic-version":"2023-06-01",
-          "anthropic-beta":   "web-search-2025-03-05",
           "content-type":     "application/json",
         },
-        timeout: 120000,
+        timeout: 60000,
       }
     );
 
