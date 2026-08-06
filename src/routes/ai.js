@@ -21,7 +21,7 @@ router.post("/messages", async (req, res) => {
 
     const params = {
       model:      "claude-sonnet-4-6",
-      max_tokens: 2000,
+      max_tokens: 4000,
       messages:   messages.slice(-4), // Last 4 turns only
     };
 
