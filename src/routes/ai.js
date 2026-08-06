@@ -1,20 +1,20 @@
-// src/routes/ai.js — Anthropic API proxy (keeps key on server)
-const express    = require("express");
-const Anthropic  = require("@anthropic-ai/sdk");
-const rateLimit  = require("express-rate-limit");
+// src/routes/ai.js — Anthropic API proxy
+// Uses axios directly to ensure correct headers for web search tool
+const express   = require("express");
+const axios     = require("axios");
+const rateLimit = require("express-rate-limit");
 
-const router   = express.Router();
-const client   = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const router = express.Router();
 
 const limiter = rateLimit({
   windowMs: 60 * 1000,
-  max: parseInt(process.env.AI_RATE_LIMIT_PER_MIN || "20"),
-  message: { error: "Too many AI requests — slow down" },
+  max: parseInt(process.env.AI_RATE_LIMIT_PER_MIN || "30"),
+  message: { error: "Too many requests — slow down" },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
-// POST /api/ai/messages  — drop-in replacement for direct Anthropic calls
+// POST /api/ai/messages — drop-in replacement for direct Anthropic calls
 router.post("/messages", limiter, async (req, res) => {
   try {
     const { model, max_tokens, system, messages, tools } = req.body;
@@ -23,27 +23,36 @@ router.post("/messages", limiter, async (req, res) => {
       return res.status(400).json({ error: "messages array required" });
     }
 
-    // Safety: strip any injected system prompt overrides
-    const safeSystem = typeof system === "string"
-      ? system.slice(0, 12000)    // Limit system prompt length
-      : undefined;
-
-    const params = {
+    const body = {
       model:      model || "claude-sonnet-4-20250514",
       max_tokens: Math.min(parseInt(max_tokens) || 1000, 4000),
-      messages:   messages.slice(-20),  // Last 20 turns only
+      messages:   messages.slice(-20),
     };
 
-    if (safeSystem)  params.system = safeSystem;
-    if (tools?.length) params.tools = tools;
+    if (system)        body.system = system.slice(0, 12000);
+    if (tools?.length) body.tools  = tools;
 
-    const response = await client.messages.create(params);
-    res.json(response);
+    const response = await axios.post(
+      "https://api.anthropic.com/v1/messages",
+      body,
+      {
+        headers: {
+          "x-api-key":        process.env.ANTHROPIC_API_KEY,
+          "anthropic-version":"2023-06-01",
+          "anthropic-beta":   "web-search-2025-03-05",
+          "content-type":     "application/json",
+        },
+        timeout: 90000,
+      }
+    );
+
+    res.json(response.data);
 
   } catch (err) {
-    console.error("[AI] Error:", err.message);
-    if (err.status) return res.status(err.status).json({ error: err.message });
-    res.status(500).json({ error: "AI service error" });
+    const status  = err.response?.status  || 500;
+    const message = err.response?.data?.error?.message || err.message;
+    console.error("[AI] Error:", status, message);
+    res.status(status).json({ error: message });
   }
 });
 
